@@ -3,6 +3,7 @@ const HousingEnrollment = require('../models/HousingEnrollment');
 const HousingData = require('../models/HousingData');
 const MonthlySnapshot = require('../models/MonthlySnapshot');
 const Student = require('../models/Student');
+const User = require('../models/User');
 
 // Helper to calculate score excluding N/A
 const calculateScore = (metricResponses) => {
@@ -100,8 +101,23 @@ exports.createSite = async (req, res) => {
                 bed: b.trim(),
                 isActive: true
             }));
+        } else if (req.body.bedroomsCount) {
+            const bedrooms = Math.max(1, Number(req.body.bedroomsCount) || 1);
+            const perBedroom = Math.max(1, Number(req.body.bedsPerBedroom) || 2);
+            const targetUnit = unitName || 'Unit 1';
+            for (let b = 1; b <= bedrooms; b++) {
+                for (let i = 0; i < perBedroom; i++) {
+                    const letter = String.fromCharCode(65 + i); // 'A', 'B', 'C'
+                    unitsList.push({
+                        unitName: targetUnit,
+                        bedroom: String(b),
+                        bed: `B${b}-${letter}`,
+                        isActive: true
+                    });
+                }
+            }
         } else {
-            const bedCount = Number(capacity) || 6;
+            const bedCount = Number(capacity) || 2;
             for (let i = 1; i <= Math.ceil(bedCount / 2); i++) {
                 unitsList.push({ unitName: unitName || 'Unit 1', bedroom: String(i), bed: `B${i}-A`, isActive: true });
                 if (unitsList.length < bedCount) {
@@ -110,7 +126,7 @@ exports.createSite = async (req, res) => {
             }
         }
 
-        const bedCount = unitsList.length || Number(capacity) || 6;
+        const bedCount = unitsList.length || Number(capacity) || 2;
 
         const newSite = await ProgramSite.create({
             name: name.trim(),
@@ -527,6 +543,222 @@ exports.updateParticipantHousingData = async (req, res) => {
     }
 };
 
+// @desc    Get participant monthly 7-question review
+// @route   GET /api/housing/participant/:studentId/monthly-review
+// @access  Private (Admin / Staff)
+exports.getParticipantMonthlyReview = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const month = req.query.month || new Date().toISOString().substring(0, 7);
+
+        const student = await Student.findById(studentId).populate('assignedStaff');
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found' });
+        }
+
+        let organizationId = req.user?.organizationId || student.assignedStaff?.organizationId;
+        if (!organizationId) {
+            const enrollmentRecord = await HousingEnrollment.findOne({ studentId });
+            organizationId = enrollmentRecord?.organizationId;
+        }
+        if (!organizationId) {
+            const fallbackSite = await ProgramSite.findOne();
+            organizationId = fallbackSite?.organizationId;
+        }
+
+        const enrollment = await HousingEnrollment.findOne({
+            studentId,
+            status: { $in: ['Active', 'Enrolled'] }
+        }).populate('siteId', 'name code');
+
+        let housingData = await HousingData.findOne({ studentId });
+        if (!housingData) {
+            housingData = await HousingData.create({
+                studentId,
+                organizationId,
+                employment: { status: 'Seeking' },
+                savings: { currentAmount: 0, priorAmount: 0, monthlyChange: 0 },
+                incidents: [],
+                transition: { readinessStatus: 'Not yet' },
+                monthlyEvaluations: []
+            });
+        }
+
+        const existingEval = (housingData.monthlyEvaluations || []).find(e => e.month === month);
+
+        if (existingEval) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    month,
+                    studentId,
+                    studentName: student.name,
+                    site: enrollment?.siteId || null,
+                    unit: enrollment?.unit || 'Unit 1',
+                    bed: enrollment?.bed || '',
+                    isEvaluated: true,
+                    evaluatedAt: existingEval.evaluatedAt,
+                    evaluatedBy: existingEval.evaluatedBy,
+                    score: existingEval.score,
+                    applicableCount: existingEval.applicableCount,
+                    scorePercentage: existingEval.scorePercentage,
+                    statusColor: existingEval.statusColor,
+                    responses: existingEval.responses
+                }
+            });
+        }
+
+        // Auto-populate default responses from live routine data
+        const empStatus = housingData.employment?.status || 'Seeking';
+        const monthlySavings = housingData.savings?.monthlyChange || 0;
+        const incidentsList = housingData.incidents || [];
+        const openIncidents = incidentsList.filter(i => i.status !== 'Resolved').length;
+        const resolvedIncidents = incidentsList.filter(i => i.status === 'Resolved').length;
+        const currentPoints = student.points || 0;
+        const targetPoints = student.totalPoints || 250;
+        const ridssStatus = currentPoints >= (targetPoints * 0.5) ? 'On Track' : 'Needs follow-up';
+
+        const suggestedResponses = DEFAULT_QUESTIONS.map(q => {
+            let ans = q.suggestedAnswer;
+            if (q.questionId === 1) ans = 'Yes';
+            else if (q.questionId === 2) ans = empStatus === 'Working' ? 'Yes' : 'No';
+            else if (q.questionId === 3) ans = monthlySavings >= 0 ? 'Yes' : 'No';
+            else if (q.questionId === 4) ans = ridssStatus === 'On Track' ? 'Yes' : 'No';
+            else if (q.questionId === 5) ans = openIncidents === 0 ? 'Yes' : 'No';
+            else if (q.questionId === 6) ans = resolvedIncidents >= 0 ? 'Yes' : 'No';
+            else if (q.questionId === 7) ans = 'N/A';
+            return {
+                questionId: q.questionId,
+                questionText: q.questionText,
+                answer: ans,
+                comment: ''
+            };
+        });
+
+        const initialScore = calculateScore(suggestedResponses);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                month,
+                studentId,
+                studentName: student.name,
+                site: enrollment?.siteId || null,
+                unit: enrollment?.unit || 'Unit 1',
+                bed: enrollment?.bed || '',
+                isEvaluated: false,
+                evaluatedAt: null,
+                evaluatedBy: null,
+                score: initialScore.yesCount,
+                applicableCount: initialScore.applicableCount,
+                scorePercentage: initialScore.score,
+                statusColor: initialScore.statusColor,
+                responses: suggestedResponses
+            }
+        });
+    } catch (error) {
+        console.error('getParticipantMonthlyReview error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// @desc    Save participant monthly 7-question review & calculate individual score
+// @route   POST /api/housing/participant/:studentId/monthly-review
+// @access  Private (Admin / Staff)
+exports.saveParticipantMonthlyReview = async (req, res) => {
+    try {
+        const { studentId } = req.params;
+        const { month, responses, siteId } = req.body;
+
+        if (!month || !responses || !Array.isArray(responses)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide month and responses array'
+            });
+        }
+
+        const student = await Student.findById(studentId).populate('assignedStaff');
+        if (!student) {
+            return res.status(404).json({ success: false, message: 'Student not found' });
+        }
+
+        let organizationId = req.user?.organizationId || student.assignedStaff?.organizationId;
+        if (!organizationId) {
+            const enrollmentRecord = await HousingEnrollment.findOne({ studentId });
+            organizationId = enrollmentRecord?.organizationId;
+        }
+        if (!organizationId) {
+            const fallbackSite = await ProgramSite.findOne();
+            organizationId = fallbackSite?.organizationId;
+        }
+
+        let housingData = await HousingData.findOne({ studentId });
+        if (!housingData) {
+            housingData = new HousingData({
+                studentId,
+                organizationId,
+                employment: { status: 'Seeking' },
+                savings: { currentAmount: 0, priorAmount: 0, monthlyChange: 0 },
+                incidents: [],
+                transition: { readinessStatus: 'Not yet' },
+                monthlyEvaluations: []
+            });
+        }
+
+        // Calculate score
+        let yesCount = 0;
+        let applicableCount = 0;
+        responses.forEach(r => {
+            if (r.answer === 'Yes') {
+                yesCount += 1;
+                applicableCount += 1;
+            } else if (r.answer === 'No') {
+                applicableCount += 1;
+            }
+        });
+
+        const scorePercentage = applicableCount > 0 ? Math.round((yesCount / applicableCount) * 100) : 100;
+        let statusColor = 'Green';
+        if (scorePercentage < 70) statusColor = 'Red';
+        else if (scorePercentage < 85) statusColor = 'Yellow';
+
+        const evalObject = {
+            month,
+            siteId: siteId || undefined,
+            responses,
+            yesCount,
+            applicableCount,
+            score: yesCount, // e.g. 5
+            scorePercentage,
+            statusColor,
+            evaluatedBy: req.user._id,
+            evaluatedAt: new Date()
+        };
+
+        if (!Array.isArray(housingData.monthlyEvaluations)) {
+            housingData.monthlyEvaluations = [];
+        }
+
+        const existingIndex = housingData.monthlyEvaluations.findIndex(e => e.month === month);
+        if (existingIndex >= 0) {
+            housingData.monthlyEvaluations[existingIndex] = evalObject;
+        } else {
+            housingData.monthlyEvaluations.push(evalObject);
+        }
+
+        await housingData.save();
+
+        res.status(200).json({
+            success: true,
+            message: `Monthly review for ${student.name} saved! Score: ${yesCount}/${applicableCount} (${scorePercentage}%)`,
+            data: evalObject
+        });
+    } catch (error) {
+        console.error('saveParticipantMonthlyReview error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // ==========================================
 // 4. MONTHLY HOUSING DASHBOARD & REVIEW
 // ==========================================
@@ -620,6 +852,49 @@ exports.getMonthlyDashboard = async (req, res) => {
             const targetPoints = enr.studentId.totalPoints || 250;
             const ridssStatus = currentPoints >= (targetPoints * 0.5) ? 'On Track' : 'Needs follow-up';
 
+            // Check for student-level monthly evaluation for this month
+            const studentEval = (hData?.monthlyEvaluations || []).find(e => e.month === month);
+            let individualScore;
+            if (studentEval) {
+                individualScore = {
+                    score: studentEval.score,
+                    applicableCount: studentEval.applicableCount,
+                    scorePercentage: studentEval.scorePercentage,
+                    statusColor: studentEval.statusColor,
+                    isEvaluated: true,
+                    evaluatedAt: studentEval.evaluatedAt,
+                    responses: studentEval.responses
+                };
+            } else {
+                // Inferred suggestions based on live data if student not yet formally evaluated
+                const inferredResponses = DEFAULT_QUESTIONS.map(q => {
+                    let ans = q.suggestedAnswer;
+                    if (q.questionId === 1) ans = 'Yes';
+                    else if (q.questionId === 2) ans = empStatus === 'Working' ? 'Yes' : 'No';
+                    else if (q.questionId === 3) ans = monthlySavings >= 0 ? 'Yes' : 'No';
+                    else if (q.questionId === 4) ans = ridssStatus === 'On Track' ? 'Yes' : 'No';
+                    else if (q.questionId === 5) ans = openIncidents === 0 ? 'Yes' : 'No';
+                    else if (q.questionId === 6) ans = resolvedIncidents >= 0 ? 'Yes' : 'No';
+                    else if (q.questionId === 7) ans = 'N/A';
+                    return {
+                        questionId: q.questionId,
+                        questionText: q.questionText,
+                        answer: ans,
+                        comment: ''
+                    };
+                });
+                const inferredScore = calculateScore(inferredResponses);
+                individualScore = {
+                    score: inferredScore.yesCount,
+                    applicableCount: inferredScore.applicableCount,
+                    scorePercentage: inferredScore.score,
+                    statusColor: inferredScore.statusColor,
+                    isEvaluated: false,
+                    evaluatedAt: null,
+                    responses: inferredResponses
+                };
+            }
+
             participantRollUp.push({
                 studentId: enr.studentId._id,
                 enrollmentId: enr._id,
@@ -634,11 +909,49 @@ exports.getMonthlyDashboard = async (req, res) => {
                 ridssStatus,
                 incidentsSummary: `${openIncidents} open, ${resolvedIncidents} resolved`,
                 openIncidentsCount: openIncidents,
-                transitionStatus: hData?.transition?.readinessStatus || 'Not yet'
+                transitionStatus: hData?.transition?.readinessStatus || 'Not yet',
+                individualScore
             });
         }
 
-        // 3. Check if snapshot is already saved/finalized for this month
+        // 3. Roll up all individual scores into Monthly Program Score Summary
+        let totalIndividualYes = 0;
+        let totalIndividualApplicable = 0;
+        let evaluatedCount = 0;
+
+        const metricStats = DEFAULT_QUESTIONS.map(q => ({
+            questionId: q.questionId,
+            questionText: q.questionText,
+            yesCount: 0,
+            noCount: 0,
+            naCount: 0
+        }));
+
+        participantRollUp.forEach(p => {
+            if (p.individualScore) {
+                totalIndividualYes += (p.individualScore.score || 0);
+                totalIndividualApplicable += (p.individualScore.applicableCount || 0);
+                if (p.individualScore.isEvaluated) evaluatedCount++;
+
+                (p.individualScore.responses || []).forEach(r => {
+                    const m = metricStats.find(item => item.questionId === r.questionId);
+                    if (m) {
+                        if (r.answer === 'Yes') m.yesCount++;
+                        else if (r.answer === 'No') m.noCount++;
+                        else if (r.answer === 'N/A') m.naCount++;
+                    }
+                });
+            }
+        });
+
+        const rolledUpScore = totalIndividualApplicable > 0 
+            ? Math.round((totalIndividualYes / totalIndividualApplicable) * 100) 
+            : 100;
+        let rolledUpStatusColor = 'Green';
+        if (rolledUpScore < 70) rolledUpStatusColor = 'Red';
+        else if (rolledUpScore < 85) rolledUpStatusColor = 'Yellow';
+
+        // 4. Check if snapshot is already saved/finalized for this month
         let snapshot = await MonthlySnapshot.findOne({ siteId, month, organizationId })
             .populate('finalizedBy', 'name email');
 
@@ -652,7 +965,10 @@ exports.getMonthlyDashboard = async (req, res) => {
             metricResponses = snapshot.metricResponses;
             scoreData = {
                 score: snapshot.score,
-                statusColor: snapshot.statusColor
+                statusColor: snapshot.statusColor,
+                yesCount: totalIndividualYes,
+                applicableCount: totalIndividualApplicable,
+                evaluatedCount
             };
             narrative = snapshot.narrative;
             isFinalized = snapshot.isFinalized;
@@ -662,24 +978,28 @@ exports.getMonthlyDashboard = async (req, res) => {
                 displayRollUp = snapshot.participantSnapshots;
             }
         } else {
-            // Auto-populate default responses based on live roll-up stats
-            metricResponses = DEFAULT_QUESTIONS.map(q => {
-                let ans = q.suggestedAnswer;
-                if (q.questionId === 2) {
-                    ans = participantRollUp.length > 0 && employedCount >= Math.ceil(participantRollUp.length / 2) ? 'Yes' : 'No';
-                } else if (q.questionId === 3) {
-                    ans = totalSavingsGrowth >= 0 ? 'Yes' : 'No';
-                } else if (q.questionId === 5) {
-                    ans = activeIncidentsCount === 0 ? 'Yes' : 'No';
-                }
+            // Aggregate Roll-Up for the 7 questions
+            metricResponses = metricStats.map(m => {
+                const applicable = m.yesCount + m.noCount;
+                const pct = applicable > 0 ? Math.round((m.yesCount / applicable) * 100) : 100;
                 return {
-                    questionId: q.questionId,
-                    questionText: q.questionText,
-                    answer: ans,
-                    comment: ''
+                    questionId: m.questionId,
+                    questionText: m.questionText,
+                    answer: pct >= 70 ? 'Yes' : 'No',
+                    yesCount: m.yesCount,
+                    noCount: m.noCount,
+                    naCount: m.naCount,
+                    percentage: pct,
+                    comment: `${m.yesCount} of ${applicable} participants meeting metric`
                 };
             });
-            scoreData = calculateScore(metricResponses);
+            scoreData = {
+                score: rolledUpScore,
+                statusColor: rolledUpStatusColor,
+                yesCount: totalIndividualYes,
+                applicableCount: totalIndividualApplicable,
+                evaluatedCount
+            };
         }
 
         // 4. Retrieve 3-month and 6-month historical trends

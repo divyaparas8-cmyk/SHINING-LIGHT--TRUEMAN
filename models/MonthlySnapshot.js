@@ -70,7 +70,20 @@ const monthlySnapshotSchema = new mongoose.Schema(
                 ridssStatus: String,
                 incidentsSummary: String,
                 openIncidentsCount: Number,
-                transitionStatus: String
+                transitionStatus: String,
+                // Individual 7-metric evaluation snapshot
+                individualScore: { type: Number, default: 0 },
+                applicableCount: { type: Number, default: 7 },
+                scorePercentage: { type: Number, default: 0 },
+                statusColor: { type: String, default: 'Green' },
+                responses: [
+                    {
+                        questionId: Number,
+                        questionText: String,
+                        answer: String,
+                        comment: String
+                    }
+                ]
             }
         ]
     },

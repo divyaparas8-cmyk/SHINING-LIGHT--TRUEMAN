@@ -10,6 +10,8 @@ const {
     updateEnrollment,
     getParticipantHousingData,
     updateParticipantHousingData,
+    getParticipantMonthlyReview,
+    saveParticipantMonthlyReview,
     getMonthlyDashboard,
     saveMonthlySnapshot,
     getSiteTrends
@@ -33,6 +35,10 @@ router.put('/enroll/:id', authorize('admin', 'staff', 'super_admin'), updateEnro
 // Participant Housing Details (Case Manager / Staff routine updates)
 router.get('/participant/:studentId', getParticipantHousingData);
 router.post('/participant/:studentId', authorize('admin', 'staff', 'super_admin'), updateParticipantHousingData);
+
+// Participant Individual 7-Question Monthly Review
+router.get('/participant/:studentId/monthly-review', getParticipantMonthlyReview);
+router.post('/participant/:studentId/monthly-review', authorize('admin', 'staff', 'super_admin'), saveParticipantMonthlyReview);
 
 // Monthly Dashboard, 7-Question Review, Scoring & Snapshots (Admin / Program Lead)
 router.get('/dashboard/:siteId', getMonthlyDashboard);

@@ -61,7 +61,37 @@ const housingDataSchema = new mongoose.Schema(
             transitionDate: { type: Date },
             destination: { type: String, default: '' },
             notes: { type: String, default: '' }
-        }
+        },
+        // 5. Monthly 7-Question Evaluations tied to this individual student
+        monthlyEvaluations: [
+            {
+                month: { type: String, required: true }, // e.g. "2026-09"
+                siteId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProgramSite' },
+                responses: [
+                    {
+                        questionId: { type: Number, required: true },
+                        questionText: { type: String, required: true },
+                        answer: {
+                            type: String,
+                            enum: ['Yes', 'No', 'N/A'],
+                            default: 'Yes'
+                        },
+                        comment: { type: String, default: '' }
+                    }
+                ],
+                yesCount: { type: Number, default: 0 },
+                applicableCount: { type: Number, default: 7 },
+                score: { type: Number, default: 0 }, // e.g. 5
+                scorePercentage: { type: Number, default: 0 }, // e.g. 71%
+                statusColor: {
+                    type: String,
+                    enum: ['Green', 'Yellow', 'Red'],
+                    default: 'Green'
+                },
+                evaluatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+                evaluatedAt: { type: Date, default: Date.now }
+            }
+        ]
     },
     { timestamps: true }
 );
