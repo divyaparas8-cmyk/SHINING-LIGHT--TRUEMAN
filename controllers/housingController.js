@@ -549,6 +549,7 @@ exports.getParticipantMonthlyReview = async (req, res) => {
     try {
         const { studentId } = req.params;
         const month = req.query.month || new Date().toISOString().substring(0, 7);
+        const reqSiteId = req.query.siteId;
 
         const student = await Student.findById(studentId).populate('assignedStaff');
         if (!student) {
@@ -584,7 +585,10 @@ exports.getParticipantMonthlyReview = async (req, res) => {
             });
         }
 
-        const existingEval = (housingData.monthlyEvaluations || []).find(e => e.month === month);
+        const existingEval = (housingData.monthlyEvaluations || []).find(e => 
+            e.month === month && 
+            (!reqSiteId || String(e.siteId) === String(reqSiteId))
+        );
 
         if (existingEval) {
             return res.status(200).json({
@@ -739,7 +743,10 @@ exports.saveParticipantMonthlyReview = async (req, res) => {
             housingData.monthlyEvaluations = [];
         }
 
-        const existingIndex = housingData.monthlyEvaluations.findIndex(e => e.month === month);
+        const existingIndex = housingData.monthlyEvaluations.findIndex(e => 
+            e.month === month && 
+            String(e.siteId) === String(siteId)
+        );
         if (existingIndex >= 0) {
             housingData.monthlyEvaluations[existingIndex] = evalObject;
         } else {
