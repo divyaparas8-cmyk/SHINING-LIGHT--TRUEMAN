@@ -436,12 +436,11 @@ exports.getParticipantHousingData = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Student not found' });
         }
 
-        // Fetch active housing enrollment
-        const enrollment = await HousingEnrollment.findOne({
+        // Fetch all housing enrollments
+        const enrollments = await HousingEnrollment.find({
             studentId,
-            organizationId,
-            status: { $in: ['Active', 'Enrolled'] }
-        }).populate('siteId', 'name code');
+            organizationId
+        }).populate('siteId', 'name code').sort({ createdAt: -1 });
 
         // Fetch or initialize housing-specific data
         let housingData = await HousingData.findOne({ studentId, organizationId });
@@ -471,7 +470,7 @@ exports.getParticipantHousingData = async (req, res) => {
                     status: student.status,
                     assignedStaff: student.assignedStaff
                 },
-                enrollment,
+                enrollments,
                 housingData
             }
         });
@@ -566,10 +565,11 @@ exports.getParticipantMonthlyReview = async (req, res) => {
             organizationId = fallbackSite?.organizationId;
         }
 
-        const enrollment = await HousingEnrollment.findOne({
+        const enrollments = await HousingEnrollment.find({
             studentId,
             status: { $in: ['Active', 'Enrolled'] }
-        }).populate('siteId', 'name code');
+        }).populate('siteId', 'name code').sort({ createdAt: -1 });
+        const enrollment = enrollments.length > 0 ? enrollments[0] : null;
 
         let housingData = await HousingData.findOne({ studentId });
         if (!housingData) {
