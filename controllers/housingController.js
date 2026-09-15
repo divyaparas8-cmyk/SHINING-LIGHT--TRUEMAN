@@ -860,7 +860,10 @@ exports.getMonthlyDashboard = async (req, res) => {
             const ridssStatus = currentPoints >= (targetPoints * 0.5) ? 'On Track' : 'Needs follow-up';
 
             // Check for student-level monthly evaluation for this month
-            const studentEval = (hData?.monthlyEvaluations || []).find(e => e.month === month);
+            const studentEval = (hData?.monthlyEvaluations || []).find(e => 
+                e.month === month && 
+                (!e.siteId || String(e.siteId) === String(siteId))
+            );
             let individualScore;
             if (studentEval) {
                 individualScore = {
