@@ -12,13 +12,17 @@ const createAttendance = async (req, res) => {
     }
 
     try {
-        const attendanceDate = new Date(date);
+        const dateClean = typeof date === 'string' ? date.split('T')[0] : new Date(date).toISOString().split('T')[0];
+        const attendanceDate = new Date(`${dateClean}T12:00:00.000Z`);
 
         // 1. Check for duplicates
         const existingRecord = await Attendance.findOne({
             studentId: studentMongoId,
             workshopId: workshopName,
-            date: attendanceDate,
+            date: {
+                $gte: new Date(`${dateClean}T00:00:00.000Z`),
+                $lte: new Date(`${dateClean}T23:59:59.999Z`)
+            },
             organizationId: req.user.organizationId
         });
 
