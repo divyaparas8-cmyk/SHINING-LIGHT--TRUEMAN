@@ -417,6 +417,74 @@ exports.updateEnrollment = async (req, res) => {
     }
 };
 
+// @desc    Reassign Bed (Move to a new bed without losing history)
+// @route   POST /api/housing/reassign
+// @access  Private (Admin / Staff)
+exports.reassignBed = async (req, res) => {
+    try {
+        const { currentEnrollmentId, studentId, siteId, unit, bed, reassignDate } = req.body;
+        const organizationId = req.user.organizationId;
+
+        if (!studentId || !siteId || !bed) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please provide studentId, siteId, and bed'
+            });
+        }
+
+        // 1. Check if the NEW bed is already occupied by someone else
+        const targetUnit = unit || 'Unit 1';
+        const bedOccupied = await HousingEnrollment.findOne({
+            siteId,
+            unit: targetUnit,
+            bed,
+            status: { $in: ['Active', 'Enrolled'] }
+        });
+        
+        if (bedOccupied && String(bedOccupied.studentId) !== String(studentId)) {
+            return res.status(400).json({
+                success: false,
+                message: `Bed ${bed} in ${targetUnit} is already occupied.`
+            });
+        }
+
+        // 2. Mark current enrollment as Exited (if provided and exists)
+        if (currentEnrollmentId) {
+            const currentEnrollment = await HousingEnrollment.findOne({ 
+                _id: currentEnrollmentId, 
+                organizationId 
+            });
+            
+            if (currentEnrollment && ['Active', 'Enrolled'].includes(currentEnrollment.status)) {
+                currentEnrollment.status = 'Exited';
+                currentEnrollment.exitDate = reassignDate || new Date();
+                currentEnrollment.exitReason = 'Reassigned to new bed';
+                await currentEnrollment.save();
+            }
+        }
+
+        // 3. Create a brand new active enrollment for the new bed
+        const newEnrollment = await HousingEnrollment.create({
+            studentId,
+            siteId,
+            organizationId,
+            unit: targetUnit,
+            bed,
+            entryDate: reassignDate || new Date(),
+            status: 'Active'
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Student successfully reassigned to new bed. History preserved.',
+            data: newEnrollment
+        });
+    } catch (error) {
+        console.error('reassignBed error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // ==========================================
 // 3. PARTICIPANT HOUSING DATA (Staff / Routine Updates)
 // ==========================================

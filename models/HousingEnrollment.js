@@ -46,7 +46,13 @@ const housingEnrollmentSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-// One student can only be enrolled in one site at a time per organization
-housingEnrollmentSchema.index({ studentId: 1, siteId: 1 }, { unique: true });
+// One student can only have one Active/Enrolled status at a site at a time per organization
+housingEnrollmentSchema.index(
+    { studentId: 1, siteId: 1 }, 
+    { 
+        unique: true, 
+        partialFilterExpression: { status: { $in: ['Active', 'Enrolled'] } }
+    }
+);
 
 module.exports = mongoose.model('HousingEnrollment', housingEnrollmentSchema);

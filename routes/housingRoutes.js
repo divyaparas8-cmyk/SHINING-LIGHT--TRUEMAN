@@ -14,7 +14,8 @@ const {
     saveParticipantMonthlyReview,
     getMonthlyDashboard,
     saveMonthlySnapshot,
-    getSiteTrends
+    getSiteTrends,
+    reassignBed
 } = require('../controllers/housingController');
 const { protect, authorize } = require('../middlewares/authMiddleware');
 
@@ -31,6 +32,7 @@ router.delete('/sites/:id', authorize('admin', 'super_admin'), deleteSite);
 router.get('/enrollments/:siteId', getEnrollments);
 router.post('/enroll', authorize('admin', 'staff', 'super_admin'), enrollStudent);
 router.put('/enroll/:id', authorize('admin', 'staff', 'super_admin'), updateEnrollment);
+router.post('/reassign', authorize('admin', 'staff', 'super_admin'), reassignBed);
 
 // Participant Housing Details (Case Manager / Staff routine updates)
 router.get('/participant/:studentId', getParticipantHousingData);
